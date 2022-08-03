@@ -57,7 +57,13 @@ func (g *Suppressor) onceDo(key string, fn func() (any, error)) Result {
 	// subscribe on result.
 	if ok {
 		// NOTE: if result not ready yield this goroutine.
-		for atomic.LoadInt32(lock) == 1 {
+		for i := 0; atomic.LoadInt32(lock) == 1; {
+			if i < 2 {
+				i++
+				time.Sleep(g.ttl / 20)
+				continue
+			}
+
 			runtime.Gosched()
 		}
 		val, _ := g.cached.Get(key)

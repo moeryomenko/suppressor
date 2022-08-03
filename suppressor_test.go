@@ -7,6 +7,7 @@ import (
 	"time"
 
 	cache "github.com/moeryomenko/ttlcache"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestDoDeduplicate(t *testing.T) {
@@ -16,29 +17,40 @@ func TestDoDeduplicate(t *testing.T) {
 
 	fn := func() (interface{}, error) {
 		atomic.AddInt32(&calls, 1)
-		<-time.After(20 * time.Millisecond)
+		<-time.After(40 * time.Millisecond)
 		return `test`, nil
 	}
 
 	ticker := time.NewTicker(10 * time.Millisecond)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	defer cancel()
+
+	concurrent := 100
+
+	group := errgroup.Group{}
 
 loop:
 	for {
 		select {
 		case <-ticker.C:
-			result := g.Do(`test`, fn)
-			if val, ok := result.Val.(string); !ok || val != `test` {
-				t.Log(`invalid value returned`)
-				t.Fail()
+			for i := 0; i < concurrent; i++ {
+				group.Go(func() error {
+					result := g.Do(`test`, fn)
+					if val, ok := result.Val.(string); !ok || val != `test` {
+						t.Log(`invalid value returned`)
+						t.Fail()
+					}
+					return nil
+				})
 			}
 		case <-ctx.Done():
 			ticker.Stop()
 			break loop
 		}
 	}
+
+	group.Wait()
 
 	if calls != 1 {
 		t.Errorf(`unexpected calls count: %d`, calls)
