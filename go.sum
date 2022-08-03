@@ -1,0 +1,7 @@
+github.com/leanovate/gopter v0.2.9 h1:fQjYxZaynp97ozCzfOyOuAGOU4aU/z37zf/tOujFk7c=
+github.com/moeryomenko/synx v0.9.0 h1:UAe25FUTDFYA0H9u8AlMLqMrzj4/XwIi99C6pYAYOCw=
+github.com/moeryomenko/synx v0.9.0/go.mod h1:PzAkLFyRhzDr3kzr+fFlO1Y2RCZxr7rLiTK87gM1GT4=
+github.com/moeryomenko/ttlcache v0.1.4 h1:TxP+dhiG90L351WHCFjV/vog7HnAZvdpOsOWp5W0YCE=
+github.com/moeryomenko/ttlcache v0.1.4/go.mod h1:MJxcoZa2PhwUGhU3MjvU+gLI2ljpCRaWujaU9S1RVDM=
+golang.org/x/sync v0.0.0-20220601150217-0de741cfad7f h1:Ax0t5p6N38Ga0dThY21weqDEyz2oklo4IvDkpigvkD8=
+golang.org/x/sync v0.0.0-20220601150217-0de741cfad7f/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
