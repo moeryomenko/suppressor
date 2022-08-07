@@ -83,8 +83,9 @@ func (g *Suppressor) onceDo(key string, fn func() (any, error)) Result {
 	atomic.StoreInt32(lock, 0)
 
 	go func(key string) {
-		<-time.After(g.ttl)
-		delete(g.awaitLocks, key) // release awiat lock.
+		time.AfterFunc(g.ttl, func() {
+			g.releaseAwaitLock(key)
+		})
 	}(key)
 
 	return result
@@ -100,6 +101,12 @@ func (g *Suppressor) checkExecuted(key string) (*int32, bool) {
 		return g.awaitLocks[key], false
 	}
 	return lock, true
+}
+
+func (g *Suppressor) releaseAwaitLock(key string) {
+	g.mu.Lock()
+	delete(g.awaitLocks, key)
+	g.mu.Unlock()
 }
 
 func intRef(i int32) *int32 {
