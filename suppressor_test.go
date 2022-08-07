@@ -2,22 +2,60 @@ package suppressor
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	cache "github.com/moeryomenko/ttlcache"
-	"golang.org/x/sync/errgroup"
+	"github.com/moeryomenko/synx"
 )
 
+var errNotFound = errors.New(`not found`)
+
+type dummyTTLCache struct {
+	items       map[string]any
+	expirations map[string]time.Time
+	lock        synx.Spinlock
+}
+
+func (c *dummyTTLCache) Set(key string, value interface{}, expiry time.Duration) error {
+	c.lock.Lock()
+	c.items[key] = value
+	c.expirations[key] = time.Now().Add(expiry)
+	c.lock.Unlock()
+
+	return nil
+}
+
+func (c *dummyTTLCache) Get(key string) (any, error) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	value, ok := c.items[key]
+	if !ok {
+		return nil, errNotFound
+	}
+
+	if c.expirations[key].Before(time.Now()) {
+		delete(c.items, key)
+		delete(c.expirations, key)
+		return nil, errNotFound
+	}
+
+	return value, nil
+}
+
 func TestDoDeduplicate(t *testing.T) {
-	g := New(10, 100*time.Millisecond, cache.LRU)
+	g := New(100*time.Millisecond, &dummyTTLCache{
+		items:       make(map[string]any),
+		expirations: make(map[string]time.Time),
+	})
 
 	var calls int32
 
 	fn := func() (interface{}, error) {
 		atomic.AddInt32(&calls, 1)
-		<-time.After(40 * time.Millisecond)
+		<-time.After(80 * time.Millisecond)
 		return `test`, nil
 	}
 
@@ -28,14 +66,14 @@ func TestDoDeduplicate(t *testing.T) {
 
 	concurrent := 100
 
-	group := errgroup.Group{}
+	group := synx.NewCtxGroup(ctx)
 
 loop:
 	for {
 		select {
 		case <-ticker.C:
 			for i := 0; i < concurrent; i++ {
-				group.Go(func() error {
+				group.Go(func(ctx context.Context) error {
 					result := g.Do(`test`, fn)
 					if val, ok := result.Val.(string); !ok || val != `test` {
 						t.Log(`invalid value returned`)
@@ -56,7 +94,7 @@ loop:
 		t.Errorf(`unexpected calls count: %d`, calls)
 	}
 
-	<-time.After(100 * time.Millisecond)
+	<-time.After(200 * time.Millisecond)
 
 	result := g.Do(`test`, fn)
 	if val, ok := result.Val.(string); !ok || val != `test` {

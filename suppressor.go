@@ -7,21 +7,28 @@ import (
 	"time"
 
 	"github.com/moeryomenko/synx"
-	cache "github.com/moeryomenko/ttlcache"
 )
+
+// Cache is common interface of cache.
+type Cache interface {
+	// Set inserts or updates the specified key-value pair with an expiration time.
+	Set(key string, value interface{}, expiry time.Duration) error
+	// Get returns the value for specified key if it is present in the cache.
+	Get(key string) (interface{}, error)
+}
 
 // Suppressor represents a class of work and forms a namespace in
 // which units of work can be executed with duplicate suppression.
 type Suppressor struct {
 	ttl        time.Duration
-	cached     cache.Cache
+	cached     Cache
 	mu         synx.Spinlock
 	awaitLocks map[string]*int32
 }
 
-func New(capacity int, ttl time.Duration, policy cache.EvictionPolicy) *Suppressor {
+func New(ttl time.Duration, cache Cache) *Suppressor {
 	return &Suppressor{
-		cached:     cache.NewCache(capacity, policy),
+		cached:     cache,
 		ttl:        ttl,
 		awaitLocks: make(map[string]*int32),
 	}
