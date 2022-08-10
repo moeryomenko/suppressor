@@ -2,8 +2,7 @@
 package suppressor
 
 import (
-	"runtime"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/moeryomenko/synx"
@@ -12,9 +11,9 @@ import (
 // Cache is common interface of cache.
 type Cache interface {
 	// Set inserts or updates the specified key-value pair with an expiration time.
-	Set(key string, value interface{}, expiry time.Duration) error
+	Set(key string, value any, expiry time.Duration) error
 	// Get returns the value for specified key if it is present in the cache.
-	Get(key string) (interface{}, error)
+	Get(key string) (any, error)
 }
 
 // Suppressor represents a class of work and forms a namespace in
@@ -23,21 +22,21 @@ type Suppressor struct {
 	ttl        time.Duration
 	cached     Cache
 	mu         synx.Spinlock
-	awaitLocks map[string]*int32
+	awaitLocks map[string]*sync.Cond
 }
 
 func New(ttl time.Duration, cache Cache) *Suppressor {
 	return &Suppressor{
 		cached:     cache,
 		ttl:        ttl,
-		awaitLocks: make(map[string]*int32),
+		awaitLocks: make(map[string]*sync.Cond),
 	}
 }
 
 // Result holds the results of Do, so they can be passed
 // on a channel.
 type Result struct {
-	Val interface{}
+	Val any
 	Err error
 }
 
@@ -49,7 +48,7 @@ type Result struct {
 // results when they are ready.
 //
 // The returned channel will not be closed.
-func (g *Suppressor) Do(key string, fn func() (interface{}, error)) Result {
+func (g *Suppressor) Do(key string, fn func() (any, error)) Result {
 	val, err := g.cached.Get(key)
 	if err == nil {
 		return val.(Result)
@@ -63,16 +62,7 @@ func (g *Suppressor) onceDo(key string, fn func() (any, error)) Result {
 
 	// subscribe on result.
 	if ok {
-		// NOTE: if result not ready yield this goroutine.
-		for i := 0; atomic.LoadInt32(lock) == 1; {
-			if i < 2 {
-				i++
-				time.Sleep(g.ttl / 20)
-				continue
-			}
-
-			runtime.Gosched()
-		}
+		lock.Wait()
 		val, _ := g.cached.Get(key)
 		return val.(Result)
 	}
@@ -80,7 +70,7 @@ func (g *Suppressor) onceDo(key string, fn func() (any, error)) Result {
 	result := Result{}
 	result.Val, result.Err = fn()
 	_ = g.cached.Set(key, result, g.ttl)
-	atomic.StoreInt32(lock, 0)
+	lock.Broadcast()
 
 	go func(key string) {
 		time.AfterFunc(g.ttl, func() {
@@ -92,13 +82,15 @@ func (g *Suppressor) onceDo(key string, fn func() (any, error)) Result {
 }
 
 // checkExecuted return await lock descriptor.
-func (g *Suppressor) checkExecuted(key string) (*int32, bool) {
+func (g *Suppressor) checkExecuted(key string) (*sync.Cond, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	lock, ok := g.awaitLocks[key]
 	if !ok {
-		g.awaitLocks[key] = intRef(1)
-		return g.awaitLocks[key], false
+		cond := sync.NewCond(&synx.Spinlock{})
+		cond.L.Lock()
+		g.awaitLocks[key] = cond
+		return cond, false
 	}
 	return lock, true
 }
