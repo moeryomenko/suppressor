@@ -2,6 +2,7 @@
 package suppressor
 
 import (
+	"sync"
 	"time"
 
 	"github.com/moeryomenko/synx"
@@ -21,14 +22,14 @@ type Suppressor struct {
 	ttl        time.Duration
 	cached     Cache
 	mu         synx.Spinlock
-	awaitLocks map[string]*synx.Spinlock
+	awaitLocks map[string]*sync.Cond
 }
 
 func New(ttl time.Duration, cache Cache) *Suppressor {
 	return &Suppressor{
 		cached:     cache,
 		ttl:        ttl,
-		awaitLocks: make(map[string]*synx.Spinlock),
+		awaitLocks: make(map[string]*sync.Cond),
 	}
 }
 
@@ -61,10 +62,7 @@ func (g *Suppressor) onceDo(key string, fn func() (any, error)) Result {
 
 	// subscribe on result.
 	if ok {
-		// NOTE: if result not ready yield this goroutine.
-		for !lock.TryLock() {
-		}
-		lock.Unlock()
+		lock.Wait()
 		val, _ := g.cached.Get(key)
 		return val.(Result)
 	}
@@ -72,7 +70,7 @@ func (g *Suppressor) onceDo(key string, fn func() (any, error)) Result {
 	result := Result{}
 	result.Val, result.Err = fn()
 	_ = g.cached.Set(key, result, g.ttl)
-	lock.Unlock()
+	lock.Broadcast()
 
 	go func(key string) {
 		time.AfterFunc(g.ttl, func() {
@@ -84,16 +82,14 @@ func (g *Suppressor) onceDo(key string, fn func() (any, error)) Result {
 }
 
 // checkExecuted return await lock descriptor.
-func (g *Suppressor) checkExecuted(key string) (*synx.Spinlock, bool) {
+func (g *Suppressor) checkExecuted(key string) (*sync.Cond, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	lock, ok := g.awaitLocks[key]
 	if !ok {
-		lock := &synx.Spinlock{}
-		lock.Lock()
-		g.awaitLocks[key] = lock
-		return lock, false
+		g.awaitLocks[key] = sync.NewCond(&synx.Spinlock{})
+		return g.awaitLocks[key], false
 	}
 	return lock, true
 }
