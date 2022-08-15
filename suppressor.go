@@ -11,10 +11,10 @@ import (
 
 // Cache is common interface of cache.
 type Cache interface {
-	// Set inserts or updates the specified key-value pair with an expiration time.
-	Set(key string, value interface{}, expiry time.Duration) error
+	// SetNX inserts or updates the specified key-value pair with an expiration time.
+	SetNX(key string, value any, expiry time.Duration)
 	// Get returns the value for specified key if it is present in the cache.
-	Get(key string) (interface{}, error)
+	Get(key string) (any, bool)
 }
 
 // Suppressor represents a class of work and forms a namespace in
@@ -50,8 +50,7 @@ type Result struct {
 //
 // The returned channel will not be closed.
 func (g *Suppressor) Do(key string, fn func() (interface{}, error)) Result {
-	val, err := g.cached.Get(key)
-	if err == nil {
+	if val, ok := g.cached.Get(key); ok {
 		return val.(Result)
 	}
 
@@ -79,7 +78,7 @@ func (g *Suppressor) onceDo(key string, fn func() (any, error)) Result {
 
 	result := Result{}
 	result.Val, result.Err = fn()
-	_ = g.cached.Set(key, result, g.ttl)
+	g.cached.SetNX(key, result, g.ttl)
 	atomic.StoreInt32(lock, 0)
 
 	go func(key string) {

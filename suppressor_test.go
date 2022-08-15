@@ -18,31 +18,29 @@ type dummyTTLCache struct {
 	lock        synx.Spinlock
 }
 
-func (c *dummyTTLCache) Set(key string, value interface{}, expiry time.Duration) error {
+func (c *dummyTTLCache) SetNX(key string, value interface{}, expiry time.Duration) {
 	c.lock.Lock()
 	c.items[key] = value
 	c.expirations[key] = time.Now().Add(expiry)
 	c.lock.Unlock()
-
-	return nil
 }
 
-func (c *dummyTTLCache) Get(key string) (any, error) {
+func (c *dummyTTLCache) Get(key string) (any, bool) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
 	value, ok := c.items[key]
 	if !ok {
-		return nil, errNotFound
+		return nil, false
 	}
 
 	if c.expirations[key].Before(time.Now()) {
 		delete(c.items, key)
 		delete(c.expirations, key)
-		return nil, errNotFound
+		return nil, false
 	}
 
-	return value, nil
+	return value, ok
 }
 
 func TestDoDeduplicate(t *testing.T) {
