@@ -12,46 +12,48 @@ import (
 
 var errNotFound = errors.New(`not found`)
 
-type dummyTTLCache struct {
-	items       map[string]any
-	expirations map[string]time.Time
+type dummyTTLCache[K comparable, V any] struct {
+	items       map[K]V
+	expirations map[K]time.Time
 	lock        synx.Spinlock
 }
 
-func (c *dummyTTLCache) SetNX(key string, value interface{}, expiry time.Duration) {
+func (c *dummyTTLCache[K, V]) SetNX(key K, value V, expiry time.Duration) {
 	c.lock.Lock()
 	c.items[key] = value
 	c.expirations[key] = time.Now().Add(expiry)
 	c.lock.Unlock()
 }
 
-func (c *dummyTTLCache) Get(key string) (any, bool) {
+func (c *dummyTTLCache[K, V]) Get(key K) (V, bool) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
 	value, ok := c.items[key]
 	if !ok {
-		return nil, false
+		var v V
+		return v, false
 	}
 
 	if c.expirations[key].Before(time.Now()) {
 		delete(c.items, key)
 		delete(c.expirations, key)
-		return nil, false
+		var v V
+		return v, false
 	}
 
 	return value, ok
 }
 
 func TestDoDeduplicate(t *testing.T) {
-	g := New(100*time.Millisecond, &dummyTTLCache{
-		items:       make(map[string]any),
+	g := New(100*time.Millisecond, &dummyTTLCache[string, Result[string]]{
+		items:       make(map[string]Result[string]),
 		expirations: make(map[string]time.Time),
 	})
 
 	var calls int32
 
-	fn := func() (interface{}, error) {
+	fn := func() (string, error) {
 		atomic.AddInt32(&calls, 1)
 		<-time.After(80 * time.Millisecond)
 		return `test`, nil
@@ -73,7 +75,7 @@ loop:
 			for i := 0; i < concurrent; i++ {
 				group.Go(func(ctx context.Context) error {
 					result := g.Do(`test`, fn)
-					if val, ok := result.Val.(string); !ok || val != `test` {
+					if result.Val != `test` {
 						t.Log(`invalid value returned`)
 						t.Fail()
 					}
@@ -95,7 +97,7 @@ loop:
 	<-time.After(200 * time.Millisecond)
 
 	result := g.Do(`test`, fn)
-	if val, ok := result.Val.(string); !ok || val != `test` {
+	if  result.Val != `test` {
 		t.Fatal(`invalid value returned`)
 	}
 	if calls != 2 {

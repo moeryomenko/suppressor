@@ -1,4 +1,3 @@
-// ported from https://github.com/moeryomenko/synx
 package suppressor
 
 import (
@@ -10,34 +9,34 @@ import (
 )
 
 // Cache is common interface of cache.
-type Cache interface {
+type Cache[K comparable, V any] interface {
 	// SetNX inserts or updates the specified key-value pair with an expiration time.
-	SetNX(key string, value any, expiry time.Duration)
+	SetNX(key K, value V, expiry time.Duration)
 	// Get returns the value for specified key if it is present in the cache.
-	Get(key string) (any, bool)
+	Get(key K) (V, bool)
 }
 
 // Suppressor represents a class of work and forms a namespace in
 // which units of work can be executed with duplicate suppression.
-type Suppressor struct {
+type Suppressor[K comparable, V any] struct {
 	ttl        time.Duration
-	cached     Cache
+	cached     Cache[K, Result[V]]
 	mu         synx.Spinlock
-	awaitLocks map[string]*int32
+	awaitLocks map[K]*int32
 }
 
-func New(ttl time.Duration, cache Cache) *Suppressor {
-	return &Suppressor{
+func New[K comparable, V any](ttl time.Duration, cache Cache[K, Result[V]]) *Suppressor[K, V] {
+	return &Suppressor[K, V]{
 		cached:     cache,
 		ttl:        ttl,
-		awaitLocks: make(map[string]*int32),
+		awaitLocks: make(map[K]*int32),
 	}
 }
 
 // Result holds the results of Do, so they can be passed
 // on a channel.
-type Result struct {
-	Val interface{}
+type Result[V any] struct {
+	Val V
 	Err error
 }
 
@@ -49,15 +48,15 @@ type Result struct {
 // results when they are ready.
 //
 // The returned channel will not be closed.
-func (g *Suppressor) Do(key string, fn func() (interface{}, error)) Result {
+func (g *Suppressor[K, V]) Do(key K, fn func() (V, error)) Result[V] {
 	if val, ok := g.cached.Get(key); ok {
-		return val.(Result)
+		return val
 	}
 
 	return g.onceDo(key, fn)
 }
 
-func (g *Suppressor) onceDo(key string, fn func() (any, error)) Result {
+func (g *Suppressor[K, V]) onceDo(key K, fn func() (V, error)) Result[V] {
 	lock, ok := g.checkExecuted(key)
 
 	// subscribe on result.
@@ -73,15 +72,15 @@ func (g *Suppressor) onceDo(key string, fn func() (any, error)) Result {
 			runtime.Gosched()
 		}
 		val, _ := g.cached.Get(key)
-		return val.(Result)
+		return val
 	}
 
-	result := Result{}
+	result := Result[V]{}
 	result.Val, result.Err = fn()
 	g.cached.SetNX(key, result, g.ttl)
 	atomic.StoreInt32(lock, 0)
 
-	go func(key string) {
+	go func(key K) {
 		time.AfterFunc(g.ttl, func() {
 			g.releaseAwaitLock(key)
 		})
@@ -91,7 +90,7 @@ func (g *Suppressor) onceDo(key string, fn func() (any, error)) Result {
 }
 
 // checkExecuted return await lock descriptor.
-func (g *Suppressor) checkExecuted(key string) (*int32, bool) {
+func (g *Suppressor[K, V]) checkExecuted(key K) (*int32, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	lock, ok := g.awaitLocks[key]
@@ -102,7 +101,7 @@ func (g *Suppressor) checkExecuted(key string) (*int32, bool) {
 	return lock, true
 }
 
-func (g *Suppressor) releaseAwaitLock(key string) {
+func (g *Suppressor[K, V]) releaseAwaitLock(key K) {
 	g.mu.Lock()
 	delete(g.awaitLocks, key)
 	g.mu.Unlock()
