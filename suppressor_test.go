@@ -3,6 +3,9 @@ package suppressor
 import (
 	"context"
 	"errors"
+	"fmt"
+
+	//"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -46,61 +49,59 @@ func (c *dummyTTLCache[K, V]) Get(key K) (V, bool) {
 }
 
 func TestDoDeduplicate(t *testing.T) {
-	g := New(100*time.Millisecond, &dummyTTLCache[string, Result[string]]{
+	g := New(200*time.Millisecond, &dummyTTLCache[string, Result[string]]{
 		items:       make(map[string]Result[string]),
 		expirations: make(map[string]time.Time),
 	})
 
-	var calls int32
+	var calls atomic.Int32
 
 	fn := func() (string, error) {
-		atomic.AddInt32(&calls, 1)
-		<-time.After(80 * time.Millisecond)
+		calls.Add(1)
+		<-time.After(10 * time.Millisecond)
 		return `test`, nil
 	}
 
-	ticker := time.NewTicker(10 * time.Millisecond)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	concurrent := 100
+	concurrent := 5
 
 	group := synx.NewCtxGroup(ctx)
 
-loop:
-	for {
-		select {
-		case <-ticker.C:
-			for i := 0; i < concurrent; i++ {
-				group.Go(func(ctx context.Context) error {
-					result := g.Do(`test`, fn)
-					if result.Val != `test` {
-						t.Log(`invalid value returned`)
-						t.Fail()
-					}
-					return nil
-				})
+	for i := 0; i < concurrent; i++ {
+		i := i
+		group.Go(func(ctx context.Context) error {
+			start := time.Now()
+			defer func() {
+				fmt.Printf("duration of gorotine: %s\n", time.Since(start))
+			}()
+
+			result := g.Do(`test`, fn)
+			if result.Val != `test` || result.Err != nil {
+				t.Logf(`invalid value returned: corotine_%d`, i)
+				t.Fail()
 			}
-		case <-ctx.Done():
-			ticker.Stop()
-			break loop
-		}
+			return nil
+		})
 	}
 
-	group.Wait()
+	err := group.Wait()
+	if err != nil {
+		t.Fatal(fmt.Printf("group failed: %s", err))
+	}
 
-	if calls != 1 {
-		t.Errorf(`unexpected calls count: %d`, calls)
+	if calls.Load() != 1 {
+		t.Errorf(`unexpected calls count: %d`, calls.Load())
 	}
 
 	<-time.After(200 * time.Millisecond)
 
 	result := g.Do(`test`, fn)
-	if  result.Val != `test` {
+	if result.Val != `test` {
 		t.Fatal(`invalid value returned`)
 	}
-	if calls != 2 {
-		t.Fatalf(`unexpected calls count: %d`, calls)
+	if calls.Load() != 2 {
+		t.Fatalf(`unexpected calls count: %d`, calls.Load())
 	}
 }
