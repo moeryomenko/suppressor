@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	//"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -49,8 +47,8 @@ func (c *dummyTTLCache[K, V]) Get(key K) (V, bool) {
 }
 
 func TestDoDeduplicate(t *testing.T) {
-	g := New(200*time.Millisecond, &dummyTTLCache[string, Result[string]]{
-		items:       make(map[string]Result[string]),
+	g := New(200*time.Millisecond, &dummyTTLCache[string, string]{
+		items:       make(map[string]string),
 		expirations: make(map[string]time.Time),
 	})
 
@@ -77,8 +75,8 @@ func TestDoDeduplicate(t *testing.T) {
 				fmt.Printf("duration of gorotine: %s\n", time.Since(start))
 			}()
 
-			result := g.Do(`test`, fn)
-			if result.Val != `test` || result.Err != nil {
+			result, err := g.Do(`test`, fn)
+			if result != `test` || err != nil {
 				t.Logf(`invalid value returned: corotine_%d`, i)
 				t.Fail()
 			}
@@ -97,8 +95,8 @@ func TestDoDeduplicate(t *testing.T) {
 
 	<-time.After(200 * time.Millisecond)
 
-	result := g.Do(`test`, fn)
-	if result.Val != `test` {
+	result, err := g.Do(`test`, fn)
+	if result != `test` {
 		t.Fatal(`invalid value returned`)
 	}
 	if calls.Load() != 2 {

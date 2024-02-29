@@ -20,24 +20,17 @@ type Cache[K comparable, V any] interface {
 // which units of work can be executed with duplicate suppression.
 type Suppressor[K comparable, V any] struct {
 	ttl        time.Duration
-	cached     Cache[K, Result[V]]
+	cached     Cache[K, V]
 	mu         synx.Spinlock
 	awaitLocks map[K]*int32
 }
 
-func New[K comparable, V any](ttl time.Duration, cache Cache[K, Result[V]]) *Suppressor[K, V] {
+func New[K comparable, V any](ttl time.Duration, cache Cache[K, V]) *Suppressor[K, V] {
 	return &Suppressor[K, V]{
 		cached:     cache,
 		ttl:        ttl,
 		awaitLocks: make(map[K]*int32),
 	}
-}
-
-// Result holds the results of Do, so they can be passed
-// on a channel.
-type Result[V any] struct {
-	Val V
-	Err error
 }
 
 // Do executes and returns the results of the given function, making
@@ -48,15 +41,15 @@ type Result[V any] struct {
 // results when they are ready.
 //
 // The returned channel will not be closed.
-func (g *Suppressor[K, V]) Do(key K, fn func() (V, error)) Result[V] {
+func (g *Suppressor[K, V]) Do(key K, fn func() (V, error)) (V, error) {
 	if val, ok := g.cached.Get(key); ok {
-		return val
+		return val, nil
 	}
 
 	return g.onceDo(key, fn)
 }
 
-func (g *Suppressor[K, V]) onceDo(key K, fn func() (V, error)) Result[V] {
+func (g *Suppressor[K, V]) onceDo(key K, fn func() (V, error)) (V, error) {
 	lock, ok := g.checkExecuted(key)
 
 	// subscribe on result.
@@ -72,12 +65,15 @@ func (g *Suppressor[K, V]) onceDo(key K, fn func() (V, error)) Result[V] {
 			runtime.Gosched()
 		}
 		val, _ := g.cached.Get(key)
-		return val
+		return val, nil
 	}
 
-	result := Result[V]{}
-	result.Val, result.Err = fn()
-	g.cached.SetNX(key, result, g.ttl)
+	val, err := fn()
+	if err != nil {
+		return val, err
+	}
+
+	g.cached.SetNX(key, val, g.ttl)
 	atomic.StoreInt32(lock, 0)
 
 	go func(key K) {
@@ -86,7 +82,7 @@ func (g *Suppressor[K, V]) onceDo(key K, fn func() (V, error)) Result[V] {
 		})
 	}(key)
 
-	return result
+	return val, nil
 }
 
 // checkExecuted return await lock descriptor.
