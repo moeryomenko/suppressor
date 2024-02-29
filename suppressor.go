@@ -51,7 +51,6 @@ func (g *Suppressor[K, V]) Do(key K, fn func() (V, error)) (V, error) {
 
 func (g *Suppressor[K, V]) onceDo(key K, fn func() (V, error)) (V, error) {
 	lock, ok := g.checkExecuted(key)
-
 	// subscribe on result.
 	if ok {
 		// NOTE: if result not ready yield this goroutine.
@@ -67,6 +66,9 @@ func (g *Suppressor[K, V]) onceDo(key K, fn func() (V, error)) (V, error) {
 		val, _ := g.cached.Get(key)
 		return val, nil
 	}
+	defer func() {
+		atomic.StoreInt32(lock, 0)
+	}()
 
 	val, err := fn()
 	if err != nil {
@@ -74,8 +76,6 @@ func (g *Suppressor[K, V]) onceDo(key K, fn func() (V, error)) (V, error) {
 	}
 
 	g.cached.SetNX(key, val, g.ttl)
-	atomic.StoreInt32(lock, 0)
-
 	go func(key K) {
 		time.AfterFunc(g.ttl, func() {
 			g.releaseAwaitLock(key)
